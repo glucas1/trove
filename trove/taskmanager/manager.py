@@ -16,6 +16,7 @@ from trove.common.context import TroveContext
 
 import trove.extensions.mgmt.instances.models as mgmtmodels
 import trove.common.cfg as cfg
+from trove.common import utils
 from trove.common import exception
 from trove.openstack.common import log as logging
 from trove.openstack.common import importutils
@@ -81,13 +82,38 @@ class Manager(periodic_task.PeriodicTasks):
     def create_instance(self, context, instance_id, name, flavor,
                         image_id, databases, users, datastore_manager,
                         packages, volume_size, backup_id, availability_zone,
-                        root_password, nics, overrides):
+                        root_password, nics, overrides, slave_of=None):
         instance_tasks = FreshInstanceTasks.load(context, instance_id)
-        instance_tasks.create_instance(flavor, image_id, databases, users,
-                                       datastore_manager, packages,
-                                       volume_size, backup_id,
-                                       availability_zone, root_password, nics,
-                                       overrides)
+
+        if slave_of:
+            # We are creating a new instance which is a slave of another
+            # First, get the snapshot of the master site, use
+            # it to restore the data to the slave, then enable
+            # replication
+            master = models.BuiltInstanceTasks.load(context, slave_of)
+            master_config = {'snapshot_id': image_id or utils.generate_uuid()}
+            snapshot = master.get_replication_snapshot(master_config)
+            snapshot_id = snapshot['dataset']['snapshot_id']
+            try:
+                instance_tasks.create_instance(flavor, snapshot_id,
+                                               databases, users,
+                                               datastore_manager, packages,
+                                               volume_size, backup_id,
+                                               availability_zone, root_password,
+                                               nics, overrides)
+                try:
+                    instance_tasks.attach_replication_slave(snapshot)
+                except:
+                    instance_tasks.delete_async()
+            finally:
+                if image_id != snapshot_id:
+                    self.delete_backup(context, snapshot_id)
+        else:
+            instance_tasks.create_instance(flavor, image_id, databases, users,
+                                           datastore_manager, packages,
+                                           volume_size, backup_id,
+                                           availability_zone, root_password,
+                                           nics, overrides)
 
     def update_overrides(self, context, instance_id, overrides):
         instance_tasks = models.BuiltInstanceTasks.load(context, instance_id)

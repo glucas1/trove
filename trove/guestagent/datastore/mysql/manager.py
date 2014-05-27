@@ -23,9 +23,11 @@ from trove.common import instance as rd_instance
 from trove.guestagent import dbaas
 from trove.guestagent import backup
 from trove.guestagent import volume
+from trove.guestagent.dbaas import get_filesystem_volume_stats
 from trove.guestagent.datastore.mysql.service import MySqlAppStatus
 from trove.guestagent.datastore.mysql.service import MySqlAdmin
 from trove.guestagent.datastore.mysql.service import MySqlApp
+from trove.guestagent.strategies.replication import get_replication_strategy
 from trove.openstack.common import log as logging
 from trove.openstack.common.gettextutils import _
 from trove.openstack.common import periodic_task
@@ -33,8 +35,7 @@ from trove.openstack.common import periodic_task
 
 LOG = logging.getLogger(__name__)
 CONF = cfg.CONF
-MANAGER = CONF.datastore_manager
-
+MANAGER = 'mysql' if not CONF.datastore_manager else CONF.datastore_manager
 
 class Manager(periodic_task.PeriodicTasks):
 
@@ -166,8 +167,7 @@ class Manager(periodic_task.PeriodicTasks):
 
     def get_filesystem_stats(self, context, fs_path):
         """Gets the filesystem stats for the path given. """
-        mount_point = CONF.get(
-            'mysql' if not MANAGER else MANAGER).mount_point
+        mount_point = CONF.get(MANAGER).mount_point
         return dbaas.get_filesystem_volume_stats(mount_point)
 
     def create_backup(self, context, backup_info):
@@ -205,18 +205,80 @@ class Manager(periodic_task.PeriodicTasks):
         app = MySqlApp(MySqlAppStatus.get())
         app.apply_overrides(overrides)
 
-    def get_replication_snapshot(self, master_config):
-        raise exception.DatastoreOperationNotSupported(
-            operation='get_replication_snapshot', datastore=MANAGER)
+    def get_replication_snapshot(self, context, master_config):
+        app = MySqlApp(MySqlAppStatus.get())
 
-    def attach_replication_slave(self, snapshot, slave_config):
-        raise exception.DatastoreOperationNotSupported(
-            operation='attach_replication_slave', datastore=MANAGER)
+        replication = get_replication_strategy(
+            CONF.replication_strategy,
+            CONF.replication_namespace)(context)
 
-    def detach_replication_slave(self):
-        raise exception.DatastoreOperationNotSupported(
-            operation='detach_replication_slave', datastore=MANAGER)
+        replication.enable_as_master(app, master_config)
 
-    def demote_replication_master(self):
-        raise exception.DatastoreOperationNotSupported(
-            operation='demote_replication_master', datastore=MANAGER)
+        snapshot_id, log_position = \
+            replication.snapshot_for_replication(app, None, master_config)
+
+        mount_point = CONF.get(MANAGER).mount_point
+        volume_stats = get_filesystem_volume_stats(mount_point)
+
+        replcation_snapshot = {
+            'dataset': {
+                'datastore': MANAGER,
+                'dataset_size': volume_stats.get('used', 0.0),
+                'volume_size': volume_stats.get('total', 0.0),
+                'snapshot_id': snapshot_id
+            },
+            'replication_strategy': CONF.replication_strategy,
+            'master': replication.get_master_ref(master_config),
+            'log_position': log_position
+        }
+
+        return replcation_snapshot
+
+    def _validate_slave_for_replication(self, context, snapshot):
+        if (snapshot['replication_strategy'] !=
+                CONF.replication_strategy):
+            raise exception.IncompatibleReplicationStrategy(
+            snapshot.update({
+            'guest_strategy': CONF.replication_strategy
+            }))
+
+        mount_point = CONF.get(MANAGER).mount_point
+        volume_stats = get_filesystem_volume_stats(mount_point)
+        if (volume_stats.get('total', 0.0) <
+                snapshot['dataset_size']):
+            raise exception.InsufficientSpaceForSlave(
+            snapshot.update({
+            'slave_volume_size': volume_stats.get('total', 0.0)
+            }))
+
+
+    def attach_replication_slave(self, context, snapshot,
+                                 slave_config):
+        self._validate_slave_for_replication(context, snapshot)
+
+        app = MySqlApp(MySqlAppStatus.get())
+
+        replication = get_replication_strategy(
+            CONF.replication_strategy,
+            CONF.replication_namespace)(context)
+
+        replication.enable_as_slave(app, snapshot)
+
+
+    def detach_replication_slave(self, context):
+        app = MySqlApp(MySqlAppStatus.get())
+
+        replication = get_replication_strategy(
+            CONF.replication_strategy,
+            CONF.replication_namespace)(context)
+
+        replication.detach_slave(app)
+
+    def demote_replication_master(self, context):
+        app = MySqlApp(MySqlAppStatus.get())
+
+        replication = get_replication_strategy(
+            CONF.replication_strategy,
+            CONF.replication_namespace)(context)
+
+        replication.demote_master(app)

@@ -262,11 +262,14 @@ class FreshInstanceTasks(FreshInstance, NotifyMixin, ConfigurationMixin):
             LOG.error(_("Timeout for service changing to active. "
                       "No usage create-event sent."))
             self.update_statuses_on_time_out()
-
         except Exception:
             LOG.exception(_("Error during create-event call."))
 
         LOG.debug("end create_instance for id: %s" % self.id)
+
+    def attach_replication_slave(self, snapshot, slave_config=None):
+        LOG.debug("Calling attach_replication_slave for %s" % self.id)
+        self.guest.attach_replication_slave(snapshot, slave_config)
 
     def report_root_enabled(self):
         mysql_models.RootHistory.create(self.context, self.id, 'root')
@@ -764,6 +767,10 @@ class BuiltInstanceTasks(BuiltInstance, NotifyMixin, ConfigurationMixin):
     def create_backup(self, backup_info):
         LOG.debug("Calling create_backup  %s " % self.id)
         self.guest.create_backup(backup_info)
+
+    def get_replication_snapshot(self, master_config):
+        LOG.debug("Calling get_replication_snapshot on %s" % self.id)
+        self.guest.get_replication_snapshot(master_config)
 
     def reboot(self):
         try:

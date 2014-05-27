@@ -430,3 +430,13 @@ class NoServiceEndpoint(TroveError):
 class EmptyCatalog(NoServiceEndpoint):
     """The service catalog is empty."""
     message = 'Empty catalog'
+
+class IncompatibleReplicationStrateg(TroveError):
+    message = _("The trove instance is configured for replication strategy "
+                "%(guest_strategy), so cannot replicate from a master "
+                "configured with %(replication_strategy) replication")
+
+class InsufficientSpaceForSlave(TroveError):
+    message = _("The target instance has only %(slave_volume_size)sG free, "
+                "but the replication snapshot contains %(dataset_size)sG "
+                "of data")

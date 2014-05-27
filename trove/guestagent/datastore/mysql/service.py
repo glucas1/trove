@@ -59,6 +59,8 @@ MYSQL_SERVICE_CANDIDATES = ["mysql", "mysqld", "mysql-server"]
 MYSQL_BIN_CANDIDATES = ["/usr/sbin/mysqld", "/usr/libexec/mysqld"]
 MYCNF_OVERRIDES = "/etc/mysql/conf.d/overrides.cnf"
 MYCNF_OVERRIDES_TMP = "/tmp/overrides.cnf.tmp"
+MYCNF_REPLMASTER = "/etc/mysql/conf.d/replication.cnf"
+MYCNF_REPLMASTER_TMP = MYCNF_REPLMASTER + ".tmp"
 
 
 # Create a package impl
@@ -816,6 +818,86 @@ class MySqlApp(object):
         LOG.info(_("Removing overrides configuration file"))
         if os.path.exists(MYCNF_OVERRIDES):
             utils.execute_with_timeout("sudo", "rm", MYCNF_OVERRIDES)
+
+    def write_replication_overrides(self, overrideValues):
+        LOG.info(_("Writing new temp replication.cnf file."))
+
+        with open(MYCNF_REPLMASTER_TMP, 'w') as overrides:
+            overrides.write(overrideValues)
+        LOG.info(_("Moving replication.cnf into correct location."))
+        utils.execute_with_timeout("sudo", "mv", MYCNF_REPLMASTER_TMP,
+                                   MYCNF_REPLMASTER)
+
+        LOG.info(_("Setting permissions on replication.cnf"))
+        utils.execute_with_timeout("sudo", "chmod", "0711",
+                                   MYCNF_REPLMASTER)
+
+    def remove_replication_overrides(self):
+        LOG.info(_("Removing replication configuration file"))
+        if os.path.exists(MYCNF_REPLMASTER):
+            utils.execute_with_timeout("sudo", "rm", MYCNF_REPLMASTER)
+
+    def grant_replication_privilege(self):
+        LOG.info(_("Granting Replication Slave privilege"))
+
+        with LocalSqlClient(get_engine()) as client:
+            g = sql_query.Grant(permissions="REPLICATION SLAVE",
+                                user=CONF.replication_user,
+                                clear=CONF.replication_password)
+
+            t = text(str(g))
+            client.execute(t)
+
+    def revoke_replication_privilege(self):
+        LOG.info(_("Revoking Replication Slave privilege"))
+
+        with LocalSqlClient(get_engine()) as client:
+            g = sql_query.Revoke(permissions="REPLICATION SLAVE",
+                                user=CONF.replication_user,
+                                clear=CONF.replication_password)
+
+            t = text(str(g))
+            client.execute(t)
+
+    def get_binlog_position(self):
+        with LocalSqlClient(get_engine()) as client:
+            result = client.execute('SHOW MASTER STATUS').fetchall()
+            status = result[0]
+            binlog_position = {
+                'log_file': status['File'],
+                'position': status['Position']
+            }
+            return binlog_position
+
+    def change_master_for_binlog(self, host, log_position):
+        LOG.info(_("Configuring replication from %(host)s") % host)
+
+        change_master_cmd = "CHANGE MASTER TO MASTER_HOST='%(host)s', " \
+                            "MASTER_USER='%(user)s', " \
+                            "MASTER_PASSWORD='%(password)s', " \
+                            "MASTER_LOG_FILE='%(log_file)s', " \
+                            "MASTER_LOG_POS='%(log_pos)s'" % {
+            'host': host,
+            'user': CONF.replication_user,
+            'password': CONF.replication_password,
+            'log_file': log_position['log_file'],
+            'log_pos': log_position['position']
+        }
+
+        with LocalSqlClient(get_engine()) as client:
+            client.execute(change_master_cmd)
+
+    def start_slave(self):
+        LOG.info(_("Starting slave replication"))
+
+        with LocalSqlClient(get_engine()) as client:
+            client.execute('START SLAVE')
+
+    def stop_slave(self):
+        LOG.info(_("Stopping slave replication"))
+
+        with LocalSqlClient(get_engine()) as client:
+            client.execute('STOP SLAVE')
 
     def start_mysql(self, update_db=False):
         LOG.info(_("Starting mysql..."))
