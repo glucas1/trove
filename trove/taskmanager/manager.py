@@ -82,15 +82,15 @@ class Manager(periodic_task.PeriodicTasks):
     def create_instance(self, context, instance_id, name, flavor,
                         image_id, databases, users, datastore_manager,
                         packages, volume_size, backup_id, availability_zone,
-                        root_password, nics, overrides, slave_of=None):
+                        root_password, nics, overrides, slave_of_id):
         instance_tasks = FreshInstanceTasks.load(context, instance_id)
 
-        if slave_of:
+        if slave_of_id:
             # We are creating a new instance which is a slave of another
             # First, get the snapshot of the master site, use
             # it to restore the data to the slave, then enable
             # replication
-            master = models.BuiltInstanceTasks.load(context, slave_of)
+            master = models.BuiltInstanceTasks.load(context, slave_of_id)
             master_config = {'snapshot_id': image_id or utils.generate_uuid()}
             snapshot = master.get_replication_snapshot(master_config)
             snapshot_id = snapshot['dataset']['snapshot_id']

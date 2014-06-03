@@ -602,7 +602,8 @@ class Instance(BuiltInstance):
     @classmethod
     def create(cls, context, name, flavor_id, image_id, databases, users,
                datastore, datastore_version, volume_size, backup_id,
-               availability_zone=None, nics=None, configuration_id=None):
+               availability_zone=None, nics=None, configuration_id=None,
+               slave_of_id=None):
 
         client = create_nova_client(context)
         try:
@@ -656,7 +657,8 @@ class Instance(BuiltInstance):
                                         datastore_version_id=
                                         datastore_version.id,
                                         task_status=InstanceTasks.BUILDING,
-                                        configuration_id=configuration_id)
+                                        configuration_id=configuration_id,
+                                        slave_of_id=slave_of_id)
             LOG.debug("Tenant %(tenant)s created new "
                       "Trove instance %(db)s..." %
                       {'tenant': context.tenant, 'db': db_info.id})
@@ -690,7 +692,8 @@ class Instance(BuiltInstance):
                                                   availability_zone,
                                                   root_password,
                                                   nics,
-                                                  overrides)
+                                                  overrides,
+                                                  slave_of_id)
 
             return SimpleInstance(context, db_info, datastore_status,
                                   root_password)
@@ -985,7 +988,7 @@ class DBInstance(dbmodels.DatabaseModelBase):
     _data_fields = ['name', 'created', 'compute_instance_id',
                     'task_id', 'task_description', 'task_start_time',
                     'volume_id', 'deleted', 'tenant_id',
-                    'datastore_version_id', 'configuration_id']
+                    'datastore_version_id', 'configuration_id', 'slave_of_id']
 
     def __init__(self, task_status, **kwargs):
         """
